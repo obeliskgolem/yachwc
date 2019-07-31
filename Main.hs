@@ -7,6 +7,7 @@ import System.Environment
 
 import Text.HTML.Parser
 import qualified Data.Text as T
+import qualified Data.ByteString.Lazy as BSL
 
 type URL        = String
 type InnerText  = T.Text
@@ -35,7 +36,9 @@ testHTTP :: IO ()
 testHTTP = do
     let settings = managerSetProxy
             (proxyEnvironment Nothing)
-            defaultManagerSettings
+            tlsManagerSettings
     man <- newManager settings
-    let req = websiteURL
-    httpLbs req man >>= print
+    req <- parseRequest websiteURL
+    response <- httpLbs req man 
+    parseTokens $ BSL.unpack $ responseBody response
+    return ()
