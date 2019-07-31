@@ -6,6 +6,7 @@ import Network.HTTP.Client.TLS
 import System.Environment
 
 import Text.HTML.Parser
+import Data.Text.Encoding
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BSL
 
@@ -31,6 +32,7 @@ main = do
 
 -------------- Processing --------------
 
+
 -------------- Testing          --------
 testHTTP :: IO ()
 testHTTP = do
@@ -40,5 +42,6 @@ testHTTP = do
     man <- newManager settings
     req <- parseRequest websiteURL
     response <- httpLbs req man 
-    parseTokens $ BSL.unpack $ responseBody response
+    let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
+    print $ parsed_tokens
     return ()
