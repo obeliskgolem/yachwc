@@ -1,0 +1,8 @@
+dist/*
+dist-newstyle/*
+*.hi
+*.o
+.ghc.*
+*.txt
+*.log
+*.xml
