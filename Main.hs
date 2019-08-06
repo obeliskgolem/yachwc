@@ -5,13 +5,15 @@ import Network.HTTP.Client.TLS
 
 import System.Environment
 
+import Control.Concurrent.Chan.Unagi
+
 import Text.HTML.Parser
 import Data.Text.Encoding
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BSL
 
 import Data.List
-import Control.Monad.State
+import qualified Data.Map.Strict as Map
 
 type URL        = String
 type InnerText  = T.Text
@@ -26,7 +28,8 @@ websiteURL = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-si
 
 main :: IO ()
 main = do
-        putStrLn "hello world"
+        (in_c, out_c) <- newChan 
+        testHTTP
         return ()
 
 -------------- URL Processing --------------
@@ -68,6 +71,8 @@ testHTTP = do
     req <- parseRequest websiteURL
     response <- httpLbs req man
     let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
-    print $ findAllHrefs websiteURL parsed_tokens
+    let page_urls = findAllHrefs websiteURL parsed_tokens
+    writeList2Chan in_c page_urls
+    getChanContents out_c >>= print
     --putStrLn $ show $ findAllHrefs parsed_tokens
     return ()

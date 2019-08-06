@@ -28,6 +28,7 @@ executable YACHWC
                        unicode-show,
                        containers,
                        html-parse >=0.2,
-                       mtl
+                       mtl,
+                       unagi-chan
   -- hs-source-dirs:
   default-language:    Haskell2010
