@@ -11,6 +11,7 @@ import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as BSL
 
 import Data.List
+import Control.Monad.State
 
 type URL        = String
 type InnerText  = T.Text
@@ -21,39 +22,25 @@ data URLMap     = Map URL Int
         deriving Show
 
 websiteURL :: URL
--- websiteURL = "https://obeliskgolem.github.io/"
 websiteURL = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-site-1.html"
-
---websiteInfo :: URLInfo
---websiteInfo = ("首页", 0)
 
 main :: IO ()
 main = do
         putStrLn "hello world"
---        processMap websiteURL websiteInfo Map.empty
         return ()
 
 -------------- URL Processing --------------
 makeAbsoluteURL :: String -> String -> String
-makeAbsoluteURL root rel 
+makeAbsoluteURL root rel
         | "http://" `isPrefixOf` rel    = rel
         | "https://" `isPrefixOf` rel   = rel
-        | otherwise                     = root ++ ('/':rel)
+        | otherwise                     = intercalate "/" (foldl processURLStack [] (T.splitOn (T.pack "/") (T.pack $ root ++ ('/':rel))))
 
-data URLAction = None | Pop | Push String
-
-generateActions :: String -> URLAction
-generateActions ".."   = Pop
-generateActions "."    = None
-generateActions ""     = None
-generateActions s      = Push s
-
-makeValidURL :: [String] -> [String]
-makeValidURL (x:_:"..":xs) = makeValidURL (x:xs)
-makeValidURL (".":xs) = makeValidURL xs
-makeValidURL ("":xs) = makeValidURL xs
-makeValidURL (x:xs) = x:(makeValidURL xs)
-makeValidURL [] = []
+processURLStack :: [String] -> T.Text -> [String]
+processURLStack url stack  = case (T.unpack stack) of
+        ".."    -> init url
+        "."     -> url
+        _       -> url ++ [T.unpack stack]
 
 -------------- Processing --------------
 findHref :: [Attr] -> String
@@ -61,10 +48,14 @@ findHref [] = []
 findHref (Attr "href" s:xs) = T.unpack s
 findHref (x:xs) = findHref xs
 
-findAllHrefs :: [Token] -> [URLInfo]
-findAllHrefs (TagOpen "a" attrs:ContentText t:xs) = (findHref attrs, t):(findAllHrefs xs)
-findAllHrefs [] = []
-findAllHrefs (x:xs) = findAllHrefs xs
+findAllHrefs :: String -> [Token] -> [URLInfo]
+findAllHrefs url (TagOpen "a" attrs:ContentText t:xs) = if x /= "" then
+        (makeAbsoluteURL url x, t):(findAllHrefs url xs)
+        else
+                findAllHrefs url xs
+        where x = findHref attrs
+findAllHrefs _ [] = []
+findAllHrefs url (x:xs) = findAllHrefs url xs
 
 
 -------------- Testing          --------
@@ -75,7 +66,8 @@ testHTTP = do
             tlsManagerSettings
     man <- newManager settings
     req <- parseRequest websiteURL
-    response <- httpLbs req man 
+    response <- httpLbs req man
     let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
-    print $ findAllHrefs parsed_tokens
+    print $ findAllHrefs websiteURL parsed_tokens
+    --putStrLn $ show $ findAllHrefs parsed_tokens
     return ()
