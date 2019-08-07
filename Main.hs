@@ -4,6 +4,7 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS
 
 import System.Environment
+import System.Timeout
 
 import qualified Control.Concurrent.Chan.Unagi as UChan
 
@@ -34,10 +35,25 @@ main = do
         globalMap <- newEmptyMVar
         putMVar globalMap (Map.fromList [rootURL])
 
-        testHTTP in_c rootURL globalMap
-        --forever $ (readChan out_c) (forkIO $ testHTTP in_c rootURL globalMap)
+        -- forever $ forkFinally (processSingle) (\_ -> return ())
+        --         where
+        --                 processSingle = do
+        --                         timeout 1000 (UChan.readChan out_c)
+        --                         return ()
+
+        -- forever $ do 
+        --         x <- timeout 1000 (UChan.readChan out_c)
+        --         case x of
+        --                 Just url        -> do
+        --                                 a1 <- async $ testHTTP in_c url globalMap
+        --                                 wait a1
+        --                 Nothing         -> return ()
+
         m <- takeMVar globalMap
         print $ Map.toList m
+        forever $ do
+                y <- timeout 1000000 (UChan.readChan out_c)
+                print $ y
         return ()
 
 ------- Global Variables and Settings --------
