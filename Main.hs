@@ -26,10 +26,6 @@ type Depth      = Int
 type Info       = (InnerText, Depth)
 type URLInfo    = (URL, Info)
 
-websiteURL = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-site-1.html"
-rootURL = (websiteURL, ("首页", 0))
-maxDepth = 1
-
 main :: IO ()
 main = do
         (in_c, out_c) <- UChan.newChan
@@ -44,9 +40,13 @@ main = do
         print $ Map.toList m
         return ()
 
-------- Global HTTP Client Settings --------
+------- Global Variables and Settings --------
 globalHTTPSetting = managerSetProxy (proxyEnvironment Nothing) defaultManagerSettings
 globalHTTPSSetting = managerSetProxy (proxyEnvironment Nothing) tlsManagerSettings
+
+websiteURL = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-site-1.html"
+rootURL = (websiteURL, ("首页", 0))
+maxDepth = 1
 
 -------------- URL Processing --------------
 makeAbsoluteURL :: String -> String -> String
