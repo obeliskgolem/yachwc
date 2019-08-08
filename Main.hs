@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy as BSL
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Monad
+import Control.Exception
 
 import Data.Maybe
 import Data.List
@@ -29,40 +30,34 @@ type URLInfo    = (URL, Info)
 
 main :: IO ()
 main = do
-        (in_c, out_c) <- UChan.newChan
-        UChan.writeChan in_c rootURL
-
         globalMap <- newEmptyMVar
         putMVar globalMap (Map.fromList [rootURL])
 
-        -- forever $ forkFinally (processSingle) (\_ -> return ())
-        --         where
-        --                 processSingle = do
-        --                         timeout 1000 (UChan.readChan out_c)
-        --                         return ()
+        toProcess <- newEmptyMVar
+        putMVar toProcess [rootURL]
 
-        -- forever $ do 
-        --         x <- timeout 1000 (UChan.readChan out_c)
-        --         case x of
-        --                 Just url        -> do
-        --                                 a1 <- async $ testHTTP in_c url globalMap
-        --                                 wait a1
-        --                 Nothing         -> return ()
+        forM_ [1..maxDepth] $ \x -> do
+                l <- takeMVar toProcess
+                newList <- mapConcurrently (`testHTTP` globalMap) l
+                print $ newList
+                putMVar toProcess (join newList)
 
         m <- takeMVar globalMap
         print $ Map.toList m
-        forever $ do
-                y <- timeout 1000000 (UChan.readChan out_c)
-                print $ y
         return ()
 
 ------- Global Variables and Settings --------
-globalHTTPSetting = managerSetProxy (proxyEnvironment Nothing) defaultManagerSettings
-globalHTTPSSetting = managerSetProxy (proxyEnvironment Nothing) tlsManagerSettings
+globalHTTP  = managerSetProxy (proxyEnvironment Nothing) defaultManagerSettings
+globalHTTPS = managerSetProxy (proxyEnvironment Nothing) tlsManagerSettings
 
-websiteURL = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-site-1.html"
+websiteURL  = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-site-1.html"
+
+rootURL :: URLInfo
 rootURL = (websiteURL, ("首页", 0))
-maxDepth = 1
+
+maxDepth = 2
+
+--errorResponse :: Response
 
 -------------- URL Processing --------------
 makeAbsoluteURL :: String -> String -> String
@@ -93,22 +88,39 @@ findAllHrefs _ [] = []
 findAllHrefs url_info (x:xs) = findAllHrefs url_info xs
 
 -------------- Testing          --------
-testHTTP :: UChan.InChan URLInfo -> URLInfo -> MVar (Map.Map URL Info) -> IO ()
-testHTTP in_c url_info@(url, (_, d)) gMap = do
---    if ("https://" `isPrefixOf` URL) then
---        man <- newManager globalHTTPSSetting
---    else
---        man <- newManager globalHTTPSetting
-    when (d >= maxDepth) (return ())
+-- testHTTP :: UChan.InChan URLInfo -> URLInfo -> MVar (Map.Map URL Info) -> IO ()
+-- testHTTP in_c url_info@(url, (_, d)) gMap = do
+--     when (d >= maxDepth) (return ())
+--     man <- if ("https://" `isPrefixOf` url) then 
+--         newManager globalHTTPSSetting
+--         else
+--         newManager globalHTTPSetting
+--     req <- parseRequest url
+--     response <- httpLbs req man
+--     m <- takeMVar gMap
 
-    man <- newManager globalHTTPSSetting
-    req <- parseRequest url
-    response <- httpLbs req man
-    m <- takeMVar gMap
+--     let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
+--     let page_urls = findAllHrefs rootURL parsed_tokens
+--     let new_urls = filter (isNothing . (`Map.lookup` m) . fst) page_urls
+--     UChan.writeList2Chan in_c new_urls
+--     putMVar gMap (Map.union m (Map.fromList new_urls))
+--     return ()
+testHTTP :: URLInfo -> MVar (Map.Map URL Info) -> ExceptT HttpExceptionContent IO [URLInfo]
+testHTTP url_info@(url, (_, d)) gMap = do
+        return ()
 
-    let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
-    let page_urls = findAllHrefs rootURL parsed_tokens
-    let new_urls = filter (isNothing . (`Map.lookup` m) . fst) page_urls
-    UChan.writeList2Chan in_c new_urls
-    putMVar gMap (Map.union m (Map.fromList new_urls))
-    return ()
+        guard (d < maxDepth)
+        let setting = if ("https://" `isPrefixOf` url) then globalHTTPS else globalHTTP
+        man <- newManager setting
+        req <- parseRequest url
+        res <- try (httpLbs req man)
+        case res of
+                Right response  -> do
+                        m <- takeMVar gMap
+                        let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
+                        let page_urls = findAllHrefs rootURL parsed_tokens
+                        let new_urls = filter (isNothing . (`Map.lookup` m) . fst) page_urls
+
+                        putMVar gMap (Map.union m (Map.fromList new_urls))
+                        return new_urls
+                Left _          -> return []
