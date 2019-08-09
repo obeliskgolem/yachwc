@@ -11,6 +11,7 @@ import qualified Control.Concurrent.Chan.Unagi as UChan
 import Text.HTML.Parser
 import Data.Text.Encoding
 import qualified Data.Text as T
+import qualified Data.Text.IO as T.IO
 import qualified Data.ByteString.Lazy as BSL
 
 import Control.Concurrent
@@ -30,34 +31,32 @@ type URLInfo    = (URL, Info)
 
 main :: IO ()
 main = do
+        [websiteURL, maxDepth] <- getArgs
+        let d = read maxDepth :: Int
+        let rootURL = (websiteURL, ("首页", 0))
+
         globalMap <- newEmptyMVar
         putMVar globalMap (Map.fromList [rootURL])
 
         toProcess <- newEmptyMVar
         putMVar toProcess [rootURL]
 
-        forM_ [1..maxDepth] $ \x -> do
+        forM_ [1..d] $ \x -> do
                 l <- takeMVar toProcess
-                newList <- mapConcurrently (`testHTTP` globalMap) l
-                print $ newList
+                let url_list = filter ((< d) . snd . snd) l
+                newList <- mapConcurrently (`testHTTP` globalMap) url_list
                 putMVar toProcess (join newList)
 
         m <- takeMVar globalMap
-        print $ Map.toList m
-        return ()
+        mapM_ (`printURLInfo` d) (Map.toList m)
+
+--------------  Print URL Info ---------------
+printURLInfo :: URLInfo -> Int -> IO ()
+printURLInfo (url, (t, d)) maxD = if (d == maxD) then do { putStr $ url ++ "\t"; T.IO.putStrLn t;} else return ()
 
 ------- Global Variables and Settings --------
 globalHTTP  = managerSetProxy (proxyEnvironment Nothing) defaultManagerSettings
 globalHTTPS = managerSetProxy (proxyEnvironment Nothing) tlsManagerSettings
-
-websiteURL  = "https://obeliskgolem.github.io/posts/2019-02-28-building-hakyll-site-1.html"
-
-rootURL :: URLInfo
-rootURL = (websiteURL, ("首页", 0))
-
-maxDepth = 2
-
---errorResponse :: Response
 
 -------------- URL Processing --------------
 makeAbsoluteURL :: String -> String -> String
@@ -79,8 +78,8 @@ findHref (Attr "href" s:xs) = T.unpack s
 findHref (x:xs) = findHref xs
 
 findAllHrefs :: URLInfo -> [Token] -> [URLInfo]
-findAllHrefs url_info@(url, (_, d)) (TagOpen "a" attrs:ContentText t:xs) = if x /= "" then
-        ((makeAbsoluteURL url x, (t, d+1))):(findAllHrefs url_info xs)
+findAllHrefs url_info@(url, (str, d)) (TagOpen "a" attrs:ContentText t:xs) = if x /= "" then
+        ((makeAbsoluteURL url x, (str `T.append` ('-' `T.cons` t), d+1))):(findAllHrefs url_info xs)
         else
                 findAllHrefs url_info xs
         where x = findHref attrs
@@ -88,39 +87,19 @@ findAllHrefs _ [] = []
 findAllHrefs url_info (x:xs) = findAllHrefs url_info xs
 
 -------------- Testing          --------
--- testHTTP :: UChan.InChan URLInfo -> URLInfo -> MVar (Map.Map URL Info) -> IO ()
--- testHTTP in_c url_info@(url, (_, d)) gMap = do
---     when (d >= maxDepth) (return ())
---     man <- if ("https://" `isPrefixOf` url) then 
---         newManager globalHTTPSSetting
---         else
---         newManager globalHTTPSetting
---     req <- parseRequest url
---     response <- httpLbs req man
---     m <- takeMVar gMap
-
---     let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
---     let page_urls = findAllHrefs rootURL parsed_tokens
---     let new_urls = filter (isNothing . (`Map.lookup` m) . fst) page_urls
---     UChan.writeList2Chan in_c new_urls
---     putMVar gMap (Map.union m (Map.fromList new_urls))
---     return ()
-testHTTP :: URLInfo -> MVar (Map.Map URL Info) -> ExceptT HttpExceptionContent IO [URLInfo]
-testHTTP url_info@(url, (_, d)) gMap = do
-        return ()
-
-        guard (d < maxDepth)
-        let setting = if ("https://" `isPrefixOf` url) then globalHTTPS else globalHTTP
-        man <- newManager setting
-        req <- parseRequest url
-        res <- try (httpLbs req man)
-        case res of
-                Right response  -> do
+testHTTP :: URLInfo -> MVar (Map.Map URL Info) -> IO [URLInfo]
+testHTTP url_info@(url, (_, _)) gMap = do
+        catch (processResponse) (\(HttpExceptionRequest _ _) -> return [])
+        where
+                processResponse = do
+                        let setting = if ("https://" `isPrefixOf` url) then globalHTTPS else globalHTTP
+                        man <- newManager setting
+                        req <- parseRequest url
+                        response <- httpLbs req man
                         m <- takeMVar gMap
                         let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
-                        let page_urls = findAllHrefs rootURL parsed_tokens
+                        let page_urls = findAllHrefs url_info parsed_tokens
                         let new_urls = filter (isNothing . (`Map.lookup` m) . fst) page_urls
 
                         putMVar gMap (Map.union m (Map.fromList new_urls))
                         return new_urls
-                Left _          -> return []
