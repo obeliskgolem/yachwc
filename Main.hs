@@ -1,118 +1,97 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS
+import Network.URI
 
 import System.Environment
 
 import Text.HTML.Parser
-
-import qualified Data.Text.Lazy as TL
+import Data.Text.Encoding
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as Enc
+import qualified Data.Text.IO as T.IO
 import qualified Data.ByteString.Lazy as BSL
 
-import qualified Text.Show.Unicode as TSU
+import Control.Concurrent
+import Control.Concurrent.Async
+import Control.Monad
+import Control.Exception
 
-import qualified Data.Map as Map
-import qualified Data.Maybe as Maybe
-
-import qualified Control.Monad as Monad
+import Data.Maybe
+import Data.List
+import qualified Data.Map.Strict as Map
 
 type URL        = String
 type InnerText  = T.Text
 type Depth      = Int
-type URLInfo    = (InnerText, Depth)
-
-data URLMap     = Map URL URLInfo
-        deriving Show
-
-data URLPair = URLPair (URL, InnerText)
-        deriving Show
-
-websiteURL :: URL
---websiteURL = "http://www.qunzh.com/index.html"
-websiteURL = "https://obeliskgolem.github.io/"
-
-websiteInfo :: URLInfo
-websiteInfo = ("首页", 0)
+type Info       = (InnerText, Depth)
+type URLInfo    = (URL, Info)
 
 main :: IO ()
 main = do
-        putStrLn "hello world"
-        processMap websiteURL websiteInfo Map.empty
-        return ()
--- --    [rootURL, maxDepth] <- getArgs
+        [websiteURL, maxDepth] <- getArgs
+        let d = read maxDepth :: Int
+        let rootURL = (websiteURL, ("首页", 0))
 
---     request <- parseRequest websiteURL
---     manager <- newManager tlsManagerSettings
---     --manager <- newManager defaultManagerSettings
+        globalMap <- newEmptyMVar
+        putMVar globalMap (Map.fromList [rootURL])
 
---     response <- httpLbs request manager 
+        toProcess <- newEmptyMVar
+        putMVar toProcess [rootURL]
 
---     let parsed_html     = Enc.decodeUtf8 $ BSL.toStrict $ responseBody response
---     let parsed_tokens   = parseTokens parsed_html
-    
---     --TSU.uprint $ goThrough (parentURL websiteURL) parsed_tokens
+        forM_ [1..d] $ \x -> do
+                l <- takeMVar toProcess
+                let url_list = filter ((< d) . snd . snd) l
+                newList <- mapConcurrently (`testHTTP` globalMap) url_list
+                putMVar toProcess (join newList)
 
+        m <- takeMVar globalMap
+        mapM_ (`printURLInfo` d) (Map.toList m)
+
+--------------  Print URL Info ---------------
+printURLInfo :: URLInfo -> Int -> IO ()
+printURLInfo (url, (t, d)) maxD = do { putStr $ url ++ "\t"; T.IO.putStrLn t;} 
+
+------- Global Variables and Settings --------
+globalHTTP  = managerSetProxy (proxyEnvironment Nothing) defaultManagerSettings
+globalHTTPS = managerSetProxy (proxyEnvironment Nothing) tlsManagerSettings
+
+-------------- URL Processing --------------
+makeAbsoluteURL :: String -> String -> String
+makeAbsoluteURL root rel
+                | isRelativeReference rel       = show $ relativeTo (fromJust $ parseRelativeReference rel) (fromJust $ parseURI root)
+                | otherwise                     = rel
 
 -------------- Processing --------------
+findHref :: [Attr] -> String
+findHref [] = []
+findHref (Attr "href" s:xs) = T.unpack s
+findHref (x:xs) = findHref xs
 
--- Generate a list of URLs from given root URL, no duplicates
-processMap :: URL -> URLInfo -> URLMap -> IO URLMap
-processMap url info parsedURL   = case Map.lookup url parsedURL of
-                                        Just x  -> return Map.empty
-                                        Nothing -> Monad.liftM Map.fromList (goThroughURL url info)
+findAllHrefs :: URLInfo -> [Token] -> [URLInfo]
+findAllHrefs url_info@(url, (str, d)) (TagOpen "a" attrs:ContentText t:xs) = if x /= "" then
+        ((makeAbsoluteURL url x, (str `T.append` ('-' `T.cons` t), d+1))):(findAllHrefs url_info xs)
+        else
+                findAllHrefs url_info xs
+        where x = findHref attrs
+findAllHrefs _ [] = []
+findAllHrefs url_info (x:xs) = findAllHrefs url_info xs
 
-goThroughURL :: URL -> URLInfo -> IO [(URL, URLInfo)]
-goThroughURL url info      = do
-    request <- parseRequest url
-    manager <- newManager tlsManagerSettings
+-------------- Testing          --------
+testHTTP :: URLInfo -> MVar (Map.Map URL Info) -> IO [URLInfo]
+testHTTP url_info@(url, (_, _)) gMap = do
+        catch (processResponse) (\(e :: SomeException) -> return [])
+        where
+                processResponse = do
+                        let setting = if ("https://" `isPrefixOf` url) then globalHTTPS else globalHTTP
+                        man <- newManager setting
+                        req <- parseRequest url
+                        response <- httpLbs req man
+                        m <- takeMVar gMap
+                        let parsed_tokens   = parseTokens $ decodeUtf8 $ BSL.toStrict $ responseBody response
+                        let page_urls = findAllHrefs url_info parsed_tokens
+                        let new_urls = filter (isNothing . (`Map.lookup` m) . fst) page_urls
 
-    manager <- case url of
-        ('h':'t':'t':'p':':':xs)        -> newManager tlsManagerSettings
-        _                               -> newManager defaultManagerSettings
-
-    response <- httpLbs request manager 
-
-    let parsed_html     = Enc.decodeUtf8 $ BSL.toStrict $ responseBody response
-    let parsed_tokens   = parseTokens parsed_html
-
-    return $ expandURL url info parsed_tokens
-
-expandURL :: URL -> URLInfo -> [Token] -> [(URL, URLInfo)]
-expandURL url info tokens@(TagOpen name attr: ContentText text: xs)
-                        | name == "a" && Maybe.isJust x       = (Maybe.fromJust x, (T.append (fst info) text, (snd info) + 1)):(expandURL url info xs)
-                                where x = toAbsoluteURL url (findHref attr)
-expandURL url info (x:xs)                       = expandURL url info xs
-expandURL _ _ []                                = []
-
--- expandURL url info (TagOpen tag_name tag_attr : ContentText tag_text: xs) 
---                         | tag_name == "a"       = case x of 
---                                                         Just s -> (s, ((fst info) ++ tag_text, (snd info) + 1)):(expandURL url info xs)
---                                                         Nothing -> (expandURL url info xs)
---                                                         where
---                                                         x  = toAbsoluteURL url (findHref tag_attr)
---                         | otherwise             = expandURL url info xs
--- expandURL url info (x:xs)    = expandURL url xs
--- expandURL _ _           = []
-
--------------- Utilities --------------
--- Retrieve hrefs from dom element attribute
-findHref :: [Attr] -> Maybe URL
-findHref []     = Nothing
-findHref ((Attr a b):xs)
-                | a == "href"   = Just (T.unpack b)
-                | otherwise     = findHref xs
-
--- Convert any URL (including relative URLs) to absolute URL
-toAbsoluteURL :: URL -> Maybe URL -> Maybe URL
-toAbsoluteURL home (Just ('.':'/':xs))                    = Just (home ++ xs)
-toAbsoluteURL home (Just s@('/':xs))                      = Just (home ++ s)
-toAbsoluteURL home (Just s@('h':'t':'t':'p':xs))          = Just s
-toAbsoluteURL home _                                      = Nothing
-
--- parentURL :: URL -> URL
--- parentURL url   = (T.unpack $ x !! 0) ++ "//" ++ (T.unpack $ x !! 2) ++ "/"
---         where
---                 x = T.splitOn "/" (T.pack url)
+                        putMVar gMap (Map.union m (Map.fromList new_urls))
+                        return new_urls

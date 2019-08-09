@@ -27,6 +27,11 @@ executable YACHWC
                        bytestring,
                        unicode-show,
                        containers,
-                       html-parse >=0.2
+                       html-parse >=0.2,
+                       mtl,
+                       async,
+                       network-uri
   -- hs-source-dirs:
   default-language:    Haskell2010
+  ghc-options:         -O2
+                       -threaded
