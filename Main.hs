@@ -1,12 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS
+import Network.URI
 
 import System.Environment
-import System.Timeout
-
-import qualified Control.Concurrent.Chan.Unagi as UChan
 
 import Text.HTML.Parser
 import Data.Text.Encoding
@@ -52,7 +51,7 @@ main = do
 
 --------------  Print URL Info ---------------
 printURLInfo :: URLInfo -> Int -> IO ()
-printURLInfo (url, (t, d)) maxD = if (d == maxD) then do { putStr $ url ++ "\t"; T.IO.putStrLn t;} else return ()
+printURLInfo (url, (t, d)) maxD = do { putStr $ url ++ "\t"; T.IO.putStrLn t;} 
 
 ------- Global Variables and Settings --------
 globalHTTP  = managerSetProxy (proxyEnvironment Nothing) defaultManagerSettings
@@ -61,15 +60,8 @@ globalHTTPS = managerSetProxy (proxyEnvironment Nothing) tlsManagerSettings
 -------------- URL Processing --------------
 makeAbsoluteURL :: String -> String -> String
 makeAbsoluteURL root rel
-        | "http://" `isPrefixOf` rel    = rel
-        | "https://" `isPrefixOf` rel   = rel
-        | otherwise                     = intercalate "/" (foldl processURLStack [] (T.splitOn (T.pack "/") (T.pack $ root ++ ('/':rel))))
-
-processURLStack :: [String] -> T.Text -> [String]
-processURLStack url stack  = case (T.unpack stack) of
-        ".."    -> init url
-        "."     -> url
-        _       -> url ++ [T.unpack stack]
+                | isRelativeReference rel       = show $ relativeTo (fromJust $ parseRelativeReference rel) (fromJust $ parseURI root)
+                | otherwise                     = rel
 
 -------------- Processing --------------
 findHref :: [Attr] -> String
@@ -89,7 +81,7 @@ findAllHrefs url_info (x:xs) = findAllHrefs url_info xs
 -------------- Testing          --------
 testHTTP :: URLInfo -> MVar (Map.Map URL Info) -> IO [URLInfo]
 testHTTP url_info@(url, (_, _)) gMap = do
-        catch (processResponse) (\(HttpExceptionRequest _ _) -> return [])
+        catch (processResponse) (\(e :: SomeException) -> return [])
         where
                 processResponse = do
                         let setting = if ("https://" `isPrefixOf` url) then globalHTTPS else globalHTTP
